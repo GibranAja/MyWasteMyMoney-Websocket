@@ -1,0 +1,23 @@
+{
+  "name": "waste-management-backend",
+  "version": "1.0.0",
+  "description": "Production-grade waste management platform backend",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node --watch src/server.js",
+    "db:migrate": "node src/utils/migrate.js",
+    "test:websocket": "node tests/websocket.test.js",
+    "test:ws-interactive": "node tests/ws-helper.js"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "dependencies": {
+    "mysql2": "^3.6.5"
+  },
+  "devDependencies": {
+    "ws": "^8.14.0"
+  },
+  "license": "MIT"
+}
