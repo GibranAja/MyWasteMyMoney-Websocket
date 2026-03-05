@@ -14,7 +14,7 @@ CREATE TABLE users (
   email         VARCHAR(255)  NOT NULL,
   password_hash VARCHAR(255)  NOT NULL,   -- PBKDF2 hash
   salt          VARCHAR(128)  NOT NULL,   -- random salt
-  role          ENUM('USER','VERIFIER','ADMIN') NOT NULL DEFAULT 'USER',
+  role          ENUM('USER','VERIFIER','ADMIN','MERCHANT') NOT NULL DEFAULT 'USER',
   points_balance INT UNSIGNED  NOT NULL DEFAULT 0,
   is_active     TINYINT(1)    NOT NULL DEFAULT 1,
   created_at    DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -168,6 +168,66 @@ CREATE TABLE audit_logs (
   KEY idx_audit_action (action_type),
   KEY idx_audit_created (created_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- ============================================================
+-- MERCHANTS
+-- ============================================================
+CREATE TABLE IF NOT EXISTS merchants (
+  id          CHAR(36)      NOT NULL,
+  user_id     CHAR(36)      NOT NULL,
+  shop_name   VARCHAR(200)  NOT NULL,
+  description TEXT,
+  address     VARCHAR(500)  NOT NULL,
+  status      ENUM('PENDING','ACTIVE','INACTIVE') NOT NULL DEFAULT 'PENDING',
+  created_at  DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at  DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  UNIQUE KEY uq_merchants_user (user_id),
+  KEY idx_merchants_status (status),
+  CONSTRAINT fk_merchants_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- ============================================================
+-- VOUCHERS
+-- Vouchers are generated when a user redeems a reward.
+-- A merchant claims the voucher when warga shows the code.
+-- ============================================================
+CREATE TABLE IF NOT EXISTS vouchers (
+  id                     CHAR(36)    NOT NULL,
+  code                   VARCHAR(16) NOT NULL,         -- e.g. "A3X7-KP2M"
+  user_id                CHAR(36)    NOT NULL,          -- voucher owner
+  reward_id              CHAR(36)    NOT NULL,
+  redemption_id          CHAR(36)    NOT NULL,
+  merchant_id            CHAR(36)    DEFAULT NULL,      -- NULL = any merchant can claim
+  status                 ENUM('ACTIVE','CLAIMED','EXPIRED') NOT NULL DEFAULT 'ACTIVE',
+  expires_at             DATETIME    NOT NULL,
+  claimed_at             DATETIME    DEFAULT NULL,
+  claimed_by_merchant_id CHAR(36)    DEFAULT NULL,
+  created_at             DATETIME    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  UNIQUE KEY uq_vouchers_code (code),
+  UNIQUE KEY uq_vouchers_redemption (redemption_id),
+  KEY idx_vouchers_user (user_id),
+  KEY idx_vouchers_status (status),
+  KEY idx_vouchers_expires (expires_at),
+  CONSTRAINT fk_vouchers_user FOREIGN KEY (user_id) REFERENCES users(id),
+  CONSTRAINT fk_vouchers_reward FOREIGN KEY (reward_id) REFERENCES rewards(id),
+  CONSTRAINT fk_vouchers_redemption FOREIGN KEY (redemption_id) REFERENCES reward_redemptions(id),
+  CONSTRAINT fk_vouchers_merchant FOREIGN KEY (merchant_id) REFERENCES merchants(id),
+  CONSTRAINT fk_vouchers_claimed_by FOREIGN KEY (claimed_by_merchant_id) REFERENCES merchants(id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- ============================================================
+-- ALTER: add merchant_id to rewards (nullable — ties reward to a specific merchant)
+-- Skipped silently by migrate.js if column already exists.
+-- ============================================================
+ALTER TABLE rewards ADD COLUMN merchant_id CHAR(36) DEFAULT NULL;
+ALTER TABLE rewards ADD CONSTRAINT fk_rewards_merchant FOREIGN KEY (merchant_id) REFERENCES merchants(id);
+
+-- ============================================================
+-- ALTER: extend users role ENUM for existing databases
+-- ============================================================
+ALTER TABLE users MODIFY COLUMN role ENUM('USER','VERIFIER','ADMIN','MERCHANT') NOT NULL DEFAULT 'USER';
 
 -- ============================================================
 -- SEED: Default waste types

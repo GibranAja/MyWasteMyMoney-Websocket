@@ -67,7 +67,15 @@ async function migrate() {
         await conn.query(stmt);
         console.log('✓', stmt.slice(0, 60).replace(/\n/g, ' '));
       } catch (err) {
-        if (err.code === 'ER_TABLE_EXISTS_ERROR' || err.code === 'ER_DUP_ENTRY') {
+        const skipCodes = [
+          'ER_TABLE_EXISTS_ERROR', // CREATE TABLE already exists
+          'ER_DUP_ENTRY',          // INSERT duplicate
+          'ER_DUP_FIELDNAME',      // ALTER TABLE ADD COLUMN already exists
+          'ER_FK_DUP_NAME',        // ADD CONSTRAINT name already exists
+          'ER_DUP_KEY',            // duplicate key name
+          'ER_CANT_DROP_FIELD_OR_KEY', // DROP COLUMN/KEY that doesn't exist
+        ];
+        if (skipCodes.includes(err.code)) {
           console.log('~ (already exists, skipping)');
         } else {
           throw err;
