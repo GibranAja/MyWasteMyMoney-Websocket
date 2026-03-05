@@ -1,9 +1,7 @@
 -- ============================================================
 -- Waste Management Platform - Database Schema
+-- NOTE: Database creation and USE are handled by migrate.js
 -- ============================================================
-
-CREATE DATABASE IF NOT EXISTS waste_management CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-USE waste_management;
 
 -- ============================================================
 -- USERS

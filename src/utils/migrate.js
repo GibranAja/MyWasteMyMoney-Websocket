@@ -83,10 +83,15 @@ async function migrate() {
       }
     }
     console.log('\nMigration complete!');
-  } finally {
+  } catch (err) {
+    console.error('\n[DB] Migration error:', err.message);
+    console.error('[DB] Error code:', err.code);
     conn.release();
-    process.exit(0);
+    process.exit(1);
   }
+
+  conn.release();
+  process.exit(0);
 }
 
 migrate().catch(err => {
