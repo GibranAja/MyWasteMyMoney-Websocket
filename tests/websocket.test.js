@@ -16,6 +16,7 @@ const { testConnection, query } = require('../src/config/database');
 const { createToken } = require('../src/utils/token');
 const { hashPassword } = require('../src/utils/password');
 const logger = require('../src/utils/logger');
+const { sendToUser, broadcastToRole } = require('../src/websocket/server');
 
 // ============================================================
 // Test utilities
@@ -612,6 +613,267 @@ async function testMissingToken() {
 }
 
 // ============================================================
+// New Feature Tests
+// ============================================================
+
+async function testSendToUser() {
+  console.log('\n📋 Test 11: sendToUser – Server-Push to Specific User');
+  console.log('─'.repeat(50));
+
+  return new Promise((resolve) => {
+    try {
+      const client = new ws(`ws://localhost:${config.server.wsPort}`);
+
+      client.on('open', async () => {
+        try {
+          // Authenticate
+          client.send(JSON.stringify({ event: 'auth', token: testToken }));
+          await waitForMessage(client, 'auth_success', 5000);
+          assert(true, 'Authenticated for sendToUser test');
+
+          // Server-side push via sendToUser
+          sendToUser(testUserId, 'points_updated', { change: 100, reason: 'submission_approved' });
+
+          const pushMsg = await waitForMessage(client, 'points_updated', 5000);
+          assert(pushMsg.data.change === 100, 'sendToUser should deliver correct payload');
+          assert(pushMsg.data.reason === 'submission_approved', 'sendToUser payload reason should match');
+
+          client.close();
+          resolve();
+        } catch (err) {
+          assert(false, `Error: ${err.message}`);
+          client.close();
+          resolve();
+        }
+      });
+
+      client.on('error', (err) => {
+        assert(false, `Connection error: ${err.message}`);
+        resolve();
+      });
+
+      setTimeout(() => {
+        assert(false, 'sendToUser test timeout');
+        client.close();
+        resolve();
+      }, 15000);
+    } catch (err) {
+      assert(false, `Test exception: ${err.message}`);
+      resolve();
+    }
+  });
+}
+
+async function testSendToUserMultipleConnections() {
+  console.log('\n📋 Test 12: sendToUser – Multiple Connections Same User');
+  console.log('─'.repeat(50));
+
+  return new Promise(async (resolve) => {
+    try {
+      const client1 = new ws(`ws://localhost:${config.server.wsPort}`);
+      const client2 = new ws(`ws://localhost:${config.server.wsPort}`);
+
+      // Register open listeners before any async awaits to avoid race conditions
+      const c1Open = new Promise((res) => client1.once('open', res));
+      const c2Open = new Promise((res) => client2.once('open', res));
+
+      // Auth both connections
+      await c1Open;
+      client1.send(JSON.stringify({ event: 'auth', token: testToken }));
+      await waitForMessage(client1, 'auth_success', 5000);
+
+      await c2Open;
+      client2.send(JSON.stringify({ event: 'auth', token: testToken }));
+      await waitForMessage(client2, 'auth_success', 5000);
+
+      // Push to the user — both connections should receive it
+      sendToUser(testUserId, 'notification', { message: 'multi-conn push test' });
+
+      const [msg1, msg2] = await Promise.all([
+        waitForMessage(client1, 'notification', 5000),
+        waitForMessage(client2, 'notification', 5000),
+      ]);
+
+      assert(
+        msg1.data.message === 'multi-conn push test',
+        'First connection should receive push'
+      );
+      assert(
+        msg2.data.message === 'multi-conn push test',
+        'Second connection should receive push'
+      );
+
+      client1.close();
+      client2.close();
+      resolve();
+    } catch (err) {
+      assert(false, `Error: ${err.message}`);
+      resolve();
+    }
+  });
+}
+
+async function testBroadcastToRole() {
+  console.log('\n📋 Test 13: broadcastToRole – Role-Based Broadcasting');
+  console.log('─'.repeat(50));
+
+  return new Promise(async (resolve) => {
+    const clients = [];
+    try {
+      const userClient  = new ws(`ws://localhost:${config.server.wsPort}`);
+      const adminClient = new ws(`ws://localhost:${config.server.wsPort}`);
+      clients.push(userClient, adminClient);
+
+      // Register open listeners before any async awaits to avoid race conditions
+      const userOpen  = new Promise((res) => userClient.once('open',  res));
+      const adminOpen = new Promise((res) => adminClient.once('open', res));
+
+      // Auth USER
+      await userOpen;
+      userClient.send(JSON.stringify({ event: 'auth', token: testToken }));
+      await waitForMessage(userClient, 'auth_success', 5000);
+
+      // Auth ADMIN
+      await adminOpen;
+      adminClient.send(JSON.stringify({ event: 'auth', token: testAdminToken }));
+      await waitForMessage(adminClient, 'auth_success', 5000);
+
+      // Broadcast ONLY to ADMIN role
+      const BROADCAST_EVENT = 'new_submission_for_admin';
+      broadcastToRole('ADMIN', BROADCAST_EVENT, { submission_id: 'test-sub-001' });
+
+      // ADMIN should receive it
+      const adminMsg = await waitForMessage(adminClient, BROADCAST_EVENT, 5000);
+      assert(
+        adminMsg.data.submission_id === 'test-sub-001',
+        'ADMIN should receive broadcastToRole event'
+      );
+
+      // USER should NOT receive it (wait briefly and confirm silence)
+      const userReceived = await Promise.race([
+        waitForMessage(userClient, BROADCAST_EVENT, 1500).then(() => true).catch(() => false),
+        new Promise((res) => setTimeout(() => res(false), 1500)),
+      ]);
+      assert(!userReceived, 'USER should NOT receive ADMIN-only broadcast');
+
+      clients.forEach(c => c.close());
+      resolve();
+    } catch (err) {
+      assert(false, `Error: ${err.message}`);
+      clients.forEach(c => c.close());
+      resolve();
+    }
+  });
+}
+
+async function testRevokedToken() {
+  console.log('\n📋 Test 14: Revoked Token (JTI Blacklist)');
+  console.log('─'.repeat(50));
+
+  const revokedJti = require('crypto').randomUUID();
+  const revokedToken = createToken({
+    user_id: testUserId,
+    email:   `revoked${Date.now()}@test.com`,
+    role:    'USER',
+    jti:     revokedJti,
+  });
+
+  // Insert JTI into blacklist
+  await query(
+    'INSERT INTO token_blacklist (jti, expires_at) VALUES (?, DATE_ADD(NOW(), INTERVAL 1 HOUR))',
+    [revokedJti]
+  );
+
+  return new Promise((resolve) => {
+    try {
+      const client = new ws(`ws://localhost:${config.server.wsPort}`);
+
+      client.on('open', () => {
+        client.send(JSON.stringify({ event: 'auth', token: revokedToken }));
+      });
+
+      client.on('message', async (data) => {
+        try {
+          const msg = JSON.parse(data);
+          if (msg.event === 'auth_error') {
+            assert(
+              msg.error?.code === 'TOKEN_REVOKED',
+              `Revoked token should return TOKEN_REVOKED (got: ${msg.error?.code})`
+            );
+            // Cleanup blacklist entry
+            await query('DELETE FROM token_blacklist WHERE jti = ?', [revokedJti]);
+            client.close();
+            resolve();
+          }
+        } catch (err) {
+          assert(false, `Error: ${err.message}`);
+          client.close();
+          resolve();
+        }
+      });
+
+      setTimeout(() => {
+        assert(false, 'Revoked token test timeout');
+        client.close();
+        resolve();
+      }, 10000);
+    } catch (err) {
+      assert(false, `Test exception: ${err.message}`);
+      resolve();
+    }
+  });
+}
+
+async function testReAuthAfterAuthenticated() {
+  console.log('\n📋 Test 15: Re-Authentication Attempt (Already Authenticated)');
+  console.log('─'.repeat(50));
+
+  return new Promise((resolve) => {
+    try {
+      const client = new ws(`ws://localhost:${config.server.wsPort}`);
+
+      client.on('open', async () => {
+        try {
+          // Auth first
+          client.send(JSON.stringify({ event: 'auth', token: testToken }));
+          await waitForMessage(client, 'auth_success', 5000);
+          assert(true, 'Initial authentication successful');
+
+          // Send auth again
+          client.send(JSON.stringify({ event: 'auth', token: testToken }));
+          const errMsg = await waitForMessage(client, 'error', 5000);
+          assert(
+            errMsg.error?.code === 'UNKNOWN_EVENT',
+            'Re-auth after authenticated should return UNKNOWN_EVENT'
+          );
+
+          client.close();
+          resolve();
+        } catch (err) {
+          assert(false, `Error: ${err.message}`);
+          client.close();
+          resolve();
+        }
+      });
+
+      client.on('error', (err) => {
+        assert(false, `Connection error: ${err.message}`);
+        resolve();
+      });
+
+      setTimeout(() => {
+        assert(false, 'Re-auth test timeout');
+        client.close();
+        resolve();
+      }, 15000);
+    } catch (err) {
+      assert(false, `Test exception: ${err.message}`);
+      resolve();
+    }
+  });
+}
+
+// ============================================================
 // Main test runner
 // ============================================================
 
@@ -636,6 +898,13 @@ async function runAllTests() {
     await testAuthTimeout();
     await testInvalidToken();
     await testMissingToken();
+
+    // New feature tests
+    await testSendToUser();
+    await testSendToUserMultipleConnections();
+    await testBroadcastToRole();
+    await testRevokedToken();
+    await testReAuthAfterAuthenticated();
 
     // Cleanup
     await cleanupTestData();
