@@ -1,9 +1,11 @@
 'use strict';
 
-const authCtrl   = require('./controllers/auth.controller');
-const wasteCtrl  = require('./controllers/waste.controller');
-const rewardCtrl = require('./controllers/reward.controller');
-const notifCtrl  = require('./controllers/notification.controller');
+const authCtrl     = require('./controllers/auth.controller');
+const wasteCtrl    = require('./controllers/waste.controller');
+const rewardCtrl   = require('./controllers/reward.controller');
+const notifCtrl    = require('./controllers/notification.controller');
+const merchantCtrl = require('./controllers/merchant.controller');
+const voucherCtrl  = require('./controllers/voucher.controller');
 const {
   authenticate, requireRole,
   runMiddleware, sendError,
@@ -77,6 +79,7 @@ function buildRouter() {
   const admin    = [authenticate, requireRole('ADMIN')];
   const verifier = [authenticate, requireRole('VERIFIER', 'ADMIN')];
   const user     = [authenticate, requireRole('USER', 'ADMIN', 'VERIFIER')];
+  const merchant = [authenticate, requireRole('MERCHANT')];
 
   // ---- Auth ----
   r.add('POST', '/api/auth/register', [],   authCtrl.register);
@@ -85,23 +88,38 @@ function buildRouter() {
   r.add('GET',  '/api/auth/profile',  auth, authCtrl.getProfile);
 
   // ---- Waste submissions ----
-  r.add('POST', '/api/submissions',                 [authenticate, requireRole('USER')], wasteCtrl.submit);
-  r.add('GET',  '/api/submissions',                 auth, wasteCtrl.listMine);
-  r.add('GET',  '/api/submissions/pending',         verifier, wasteCtrl.listPending);
-  r.add('GET',  '/api/submissions/:id',             auth, wasteCtrl.getOne);
-  r.add('POST', '/api/submissions/:id/verify',      verifier, wasteCtrl.verify);
+  r.add('POST', '/api/submissions',             [authenticate, requireRole('USER')], wasteCtrl.submit);
+  r.add('GET',  '/api/submissions',             auth, wasteCtrl.listMine);
+  r.add('GET',  '/api/submissions/pending',     verifier, wasteCtrl.listPending);
+  r.add('GET',  '/api/submissions/:id',         auth, wasteCtrl.getOne);
+  r.add('POST', '/api/submissions/:id/verify',  verifier, wasteCtrl.verify);
 
   // ---- Rewards ----
-  r.add('GET',  '/api/rewards',                     [],   rewardCtrl.list);
-  r.add('POST', '/api/rewards',                     admin, rewardCtrl.create);
-  r.add('PUT',  '/api/rewards/:id',                 admin, rewardCtrl.update);
-  r.add('POST', '/api/rewards/:id/redeem',          [authenticate, requireRole('USER')], rewardCtrl.redeem);
-  r.add('GET',  '/api/rewards/my-redemptions',      auth, rewardCtrl.myRedemptions);
+  r.add('GET',  '/api/rewards',                    [],   rewardCtrl.list);
+  r.add('POST', '/api/rewards',                    admin, rewardCtrl.create);
+  r.add('PUT',  '/api/rewards/:id',                admin, rewardCtrl.update);
+  r.add('POST', '/api/rewards/:id/redeem',         [authenticate, requireRole('USER')], rewardCtrl.redeem);
+  r.add('GET',  '/api/rewards/my-redemptions',     auth, rewardCtrl.myRedemptions);
+
+  // ---- Merchants ----
+  // Static routes must be declared before parameterised ones
+  r.add('POST', '/api/merchants/register',         [authenticate, requireRole('USER')], merchantCtrl.register);
+  r.add('GET',  '/api/merchants/me',               merchant, merchantCtrl.getMe);
+  r.add('PUT',  '/api/merchants/me',               merchant, merchantCtrl.updateMe);
+  r.add('GET',  '/api/merchants',                  admin, merchantCtrl.list);
+  r.add('PUT',  '/api/merchants/:id/status',       admin, merchantCtrl.setStatus);
+
+  // ---- Vouchers ----
+  // Static routes before parameterised ones
+  r.add('GET',  '/api/vouchers/mine',              auth, voucherCtrl.mine);
+  r.add('GET',  '/api/vouchers/claimed',           merchant, voucherCtrl.claimed);
+  r.add('GET',  '/api/vouchers/:code',             merchant, voucherCtrl.lookup);
+  r.add('POST', '/api/vouchers/:code/claim',       merchant, voucherCtrl.claim);
 
   // ---- Notifications ----
-  r.add('GET',  '/api/notifications',               auth, notifCtrl.list);
-  r.add('PUT',  '/api/notifications/read-all',      auth, notifCtrl.markAllRead);
-  r.add('PUT',  '/api/notifications/:id/read',      auth, notifCtrl.markRead);
+  r.add('GET',  '/api/notifications',          auth, notifCtrl.list);
+  r.add('PUT',  '/api/notifications/read-all', auth, notifCtrl.markAllRead);
+  r.add('PUT',  '/api/notifications/:id/read', auth, notifCtrl.markRead);
 
   // ---- Health ----
   r.add('GET', '/health', [], (req, res) => {
