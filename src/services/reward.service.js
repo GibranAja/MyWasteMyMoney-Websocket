@@ -1,21 +1,22 @@
 'use strict';
 
-const rewardRepo = require('../repositories/reward.repository');
-const userRepo   = require('../repositories/user.repository');
-const auditRepo  = require('../repositories/auditLog.repository');
-const notifSvc   = require('./notification.service');
+const rewardRepo  = require('../repositories/reward.repository');
+const userRepo    = require('../repositories/user.repository');
+const auditRepo   = require('../repositories/auditLog.repository');
+const voucherRepo = require('../repositories/voucher.repository');
+const notifSvc    = require('./notification.service');
 const { withTransaction, query } = require('../config/database');
 const {
   NotFoundError, AppError,
   InsufficientPointsError, OutOfStockError,
 } = require('../utils/errors');
 
-async function createReward({ name, description, requiredPoints, stock, adminId }, { ip } = {}) {
-  const reward = await rewardRepo.create({ name, description, requiredPoints, stock, createdBy: adminId });
+async function createReward({ name, description, requiredPoints, stock, merchantId, adminId }, { ip } = {}) {
+  const reward = await rewardRepo.create({ name, description, requiredPoints, stock, merchantId, createdBy: adminId });
   await auditRepo.writeAuditLog({
     actorId:    adminId,
     actionType: 'REWARD_CREATED',
-    metadata:   { rewardId: reward.id, name, requiredPoints, stock },
+    metadata:   { rewardId: reward.id, name, requiredPoints, stock, merchantId },
     ipAddress:  ip,
   });
   return reward;
@@ -106,7 +107,7 @@ async function redeem({ userId, rewardId }, { ip } = {}) {
     },
   });
 
-  // Also push points_updated event
+  // Push points_updated WebSocket event
   const { sendToUser } = require('../websocket/server');
   sendToUser(userId, 'points_updated', {
     change: -reward.required_points,
@@ -114,7 +115,34 @@ async function redeem({ userId, rewardId }, { ip } = {}) {
     reward_name: reward.name,
   });
 
-  return { redemption_id: redemptionId, reward_id: rewardId, points_used: reward.required_points };
+  // Generate a voucher tied to this redemption
+  // merchant_id on reward means the voucher is designated for that merchant only
+  const voucher = await voucherRepo.create({
+    userId,
+    rewardId,
+    redemptionId,
+    merchantId: reward.merchant_id || null,
+  });
+
+  await notifSvc.send({
+    userId,
+    type:    'VOUCHER_ISSUED',
+    message: `Your voucher for "${reward.name}" is ready. Code: ${voucher.code} (valid 30 days).`,
+    wsEvent: 'voucher_issued',
+    wsPayload: {
+      voucher_code: voucher.code,
+      expires_at:  voucher.expires_at,
+      reward_name: reward.name,
+    },
+  });
+
+  return {
+    redemption_id: redemptionId,
+    reward_id:     rewardId,
+    points_used:   reward.required_points,
+    voucher_code:  voucher.code,
+    voucher_expires_at: voucher.expires_at,
+  };
 }
 
 async function listMyRedemptions(userId, opts) {

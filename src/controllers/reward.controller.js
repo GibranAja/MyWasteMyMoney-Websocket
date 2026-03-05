@@ -9,6 +9,7 @@ async function create(req, res) {
   const reward = await rewardSvc.createReward({
     ...data,
     requiredPoints: data.required_points,
+    merchantId:     data.merchant_id || null,
     adminId: req.user.user_id,
   }, { ip: req.socket.remoteAddress });
   sendSuccess(res, 201, { message: 'Reward created', reward });

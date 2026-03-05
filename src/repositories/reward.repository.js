@@ -3,12 +3,12 @@
 const { query } = require('../config/database');
 const crypto    = require('crypto');
 
-async function create({ name, description, requiredPoints, stock, createdBy }) {
+async function create({ name, description, requiredPoints, stock, createdBy, merchantId = null }) {
   const id = crypto.randomUUID();
   await query(
-    `INSERT INTO rewards (id, name, description, required_points, stock, created_by)
-     VALUES (?, ?, ?, ?, ?, ?)`,
-    [id, name, description || null, requiredPoints, stock, createdBy]
+    `INSERT INTO rewards (id, name, description, required_points, stock, created_by, merchant_id)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    [id, name, description || null, requiredPoints, stock, createdBy, merchantId || null]
   );
   return findById(id);
 }
